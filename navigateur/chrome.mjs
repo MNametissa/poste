@@ -154,7 +154,8 @@ chrome.on('exit', () => quitter(1));
 function barre() {
     const cols = process.stdout.columns;
     const aide = ' Ctrl+L adresse  Alt+←/→  F5  F12  Ctrl+Q ';
-    const texte = edition !== null ? ` Adresse : ${edition}▏` : ` ${titre || 'Chrome'} — ${adresse}`;
+    const texte = edition !== null ? ` Adresse : ${edition}▏`
+        : ouvreDt ? ' Ouverture des DevTools…' : ` ${titre || 'Chrome'} — ${adresse}`;
     const place = Math.max(0, cols - aide.length);
     const gauche = texte.length > place ? texte.slice(0, Math.max(0, place - 1)) + '…' : texte.padEnd(place);
     ecrire(`${ESC}7${ESC}[1;1H${ESC}[48;2;28;28;28m${ESC}[38;2;230;230;230m${gauche}`
@@ -209,6 +210,7 @@ async function dimensionner() {
 // fenetre), branches sur la page par le relais local de pont-devtools.mjs.
 let pont = null;
 let bascule = false;
+let ouvreDt = false;  // message dans la barre pendant l'ouverture
 async function devtools() {
     if (bascule) return;
     bascule = true;
@@ -217,11 +219,14 @@ async function devtools() {
             const d = dt;
             dt = null;
             focus = 'page';
+            ouvreDt = false;
             pont.deconnecter();
             await cdp('Target.closeTarget', { targetId: d.cible });
             ecrire(`${ESC}_Ga=d,d=I,i=3,q=2${ESC}\\${ESC}_Ga=d,d=I,i=4,q=2${ESC}\\`);
             imageActive.dt = 0;
         } else {
+            ouvreDt = true;  // le premier chargement des DevTools prend quelques secondes
+            barre();
             pont ??= await ouvrirPont(async (envoyer) => {
                 const { sessionId } = await cdp('Target.attachToTarget', { targetId: cible.targetId, flatten: true });
                 relais.set(sessionId, (m) => { delete m.sessionId; envoyer(JSON.stringify(m)); });
@@ -241,7 +246,7 @@ async function devtools() {
         ecrire(`${ESC}[2J`);
         await dimensionner();
         barre();
-    } finally { bascule = false; }
+    } catch { ouvreDt = false; } finally { bascule = false; barre(); }
 }
 
 function versAdresse(t) {
@@ -389,6 +394,12 @@ if (journal) {
     await page('Runtime.enable');
     await page('Log.enable');
 }
+// fin du chargement des DevTools : on retire le message de la barre
+const chargement = ecoutes['Page.loadEventFired'];
+ecoutes['Page.loadEventFired'] = (p, s) => {
+    if (dt && s === dt.session) { noter('DevTools charges'); ouvreDt = false; barre(); }
+    else chargement?.(p, s);
+};
 await page('Page.enable');
 // s'annoncer comme un Chrome normal : en "HeadlessChrome", beaucoup de sites servent une autre page
 const { userAgent = '' } = await cdp('Browser.getVersion');
