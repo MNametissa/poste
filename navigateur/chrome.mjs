@@ -17,6 +17,7 @@ const HOME = os.homedir();
 const ETAT = path.join(HOME, '.local/state/poste/chrome');
 const ESC = '\x1b';
 const ecrire = (s) => process.stdout.write(s);
+process.stdout.on('error', () => {});  // fenetre fermee : terminal disparu, on nettoie quand meme
 const t0 = Date.now();
 const etapes = [];  // durees de demarrage, ecrites dans demarrage.log (aucune donnee personnelle)
 const etape = (nom) => {
@@ -135,18 +136,22 @@ let titre = '';
 let adresse = '';
 let edition = null;  // texte en cours de saisie dans la barre d'adresse
 let decalage = 18;   // hauteur en pixels de la ligne de la barre
-let largeur = 0;
-let hauteur = 0;    // hauteur de la page en pixels
-let hauteurDt = 0;  // hauteur des DevTools en pixels (0 si fermes)
+let largeur = 0;    // largeur de la page en pixels
+let largeurDt = 0;  // largeur des DevTools en pixels (0 si fermes)
+let hauteur = 0;
+let colonnesPage = 0;
 
 function quitter(code = 0) {
     if (fini) return;
     fini = true;
     ecrire(`${ESC}_Ga=d,d=A,q=2${ESC}\\${ESC}[?2004l${ESC}[?1016l${ESC}[?1006l${ESC}[?1003l${ESC}[?25h${ESC}[?1049l`);
     try { process.stdin.setRawMode(false); } catch { /* deja restaure */ }
+    // effacer la copie seulement une fois Chrome arrete : en s'arretant il y reecrit des fichiers
+    const nettoyer = () => { fs.rmSync(copie, { recursive: true, force: true }); process.exit(code); };
+    if (chrome.exitCode !== null || chrome.signalCode !== null) return nettoyer();
+    chrome.once('exit', nettoyer);
     chrome.kill();
-    fs.rmSync(copie, { recursive: true, force: true });
-    process.exit(code);
+    setTimeout(() => chrome.kill('SIGKILL'), 3000).unref();
 }
 for (const s of ['SIGTERM', 'SIGHUP', 'SIGINT']) process.on(s, () => quitter(0));
 chrome.on('exit', () => quitter(1));
@@ -170,8 +175,8 @@ function afficher(b64, zone) {
     const base = zone === 'dt' ? 3 : 1;
     const ancienne = imageActive[zone];
     const nouvelle = ancienne === base ? base + 1 : base;
-    const ligne = zone === 'dt' ? 2 + Math.round(hauteur / decalage) : 2;
-    let s = `${ESC}[?2026h${ESC}7${ESC}[${ligne};1H`;
+    const colonne = zone === 'dt' ? colonnesPage + 1 : 1;
+    let s = `${ESC}[?2026h${ESC}7${ESC}[2;${colonne}H`;
     for (let i = 0; i < b64.length; i += 4096) {
         const plus = i + 4096 < b64.length ? 1 : 0;
         const bout = b64.slice(i, i + 4096);
@@ -193,16 +198,17 @@ const taillePixels = () => new Promise((r) => {
 async function dimensionner() {
     const px = await taillePixels();
     decalage = Math.floor(px.h / process.stdout.rows);
-    largeur = px.w;
-    const lignes = process.stdout.rows - 1;
-    hauteur = dt ? Math.ceil(lignes / 2) * decalage : px.h - decalage;  // DevTools : moitie basse
-    hauteurDt = dt ? px.h - decalage - hauteur : 0;
-    const zones = [[session, hauteur]];
-    if (dt) zones.push([dt.session, hauteurDt]);
-    for (const [s, h] of zones) {
-        await cdp('Emulation.setDeviceMetricsOverride', { width: largeur, height: h, deviceScaleFactor: 1, mobile: false }, s);
+    hauteur = px.h - decalage;
+    const cols = process.stdout.columns;
+    colonnesPage = dt ? Math.ceil(cols / 2) : cols;  // DevTools : moitie droite
+    largeur = dt ? Math.floor(colonnesPage * px.w / cols) : px.w;
+    largeurDt = dt ? px.w - largeur : 0;
+    const zones = [[session, largeur]];
+    if (dt) zones.push([dt.session, largeurDt]);
+    for (const [s, w] of zones) {
+        await cdp('Emulation.setDeviceMetricsOverride', { width: w, height: hauteur, deviceScaleFactor: 1, mobile: false }, s);
         await cdp('Page.stopScreencast', {}, s);
-        await cdp('Page.startScreencast', { format: 'png', maxWidth: largeur, maxHeight: h, everyNthFrame: 1 }, s);
+        await cdp('Page.startScreencast', { format: 'png', maxWidth: w, maxHeight: hauteur, everyNthFrame: 1 }, s);
     }
 }
 
@@ -266,11 +272,11 @@ async function historique(sens) {
 // ---------- 4. souris (coordonnees en pixels, mode 1016)
 let dernierClic = { t: 0, x: 0, y: 0, n: 0 };
 function souris(b, x, y, relache) {
-    const px = x - 1;
-    let py = y - 1 - decalage;
+    let px = x - 1;
+    const py = y - 1 - decalage;
     if (py < 0) { if (!relache && b === 0) { edition = ''; barre(); } return; }
     let zone = session;
-    if (dt && py >= hauteur) { zone = dt.session; py -= hauteur; }
+    if (dt && px >= largeur) { zone = dt.session; px -= largeur; }
     if (!relache && !(b & 32) && !(b & 64)) focus = zone === session ? 'page' : 'dt';
     const page = (method, params) => cdp(method, params, zone);
     const modifiers = (b & 8 ? 1 : 0) | (b & 16 ? 2 : 0) | (b & 4 ? 8 : 0);
