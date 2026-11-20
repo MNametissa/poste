@@ -5,7 +5,6 @@
 # Si ce code leve une erreur, kitty revient seul au style d'onglets par defaut.
 # S'il manque de place apres les onglets, l'etat n'est pas affiche.
 import glob
-import os
 import time
 
 from kitty.fast_data_types import add_timer, get_boss
@@ -21,10 +20,10 @@ VIOLET = 0xbb9af7
 BLEU = 0x7aa2f7
 BLANC = 0xffffff
 SEP = ' │ '
-COEURS = os.cpu_count() or 1
 JOURS = ('lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.', 'dim.')
 MOIS = ('janv.', 'fevr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'aout', 'sept.', 'oct.', 'nov.', 'dec.')
 _reseau = {'t': 0.0, 'rx': 0, 'tx': 0, 'down': 0, 'up': 0}
+_cpu = {'total': 0, 'repos': 0, 'pct': 0}
 
 
 def _lire(chemin: str) -> str:
@@ -66,24 +65,53 @@ def _maj_reseau() -> None:
     _reseau.update(t=t, rx=rx, tx=tx)
 
 
+def _maj_cpu() -> None:
+    """% d'utilisation du processeur depuis la mesure precedente (/proc/stat)."""
+    champs = (_lire('/proc/stat').splitlines() or ['cpu'])[0].split()[1:9]
+    if len(champs) < 5:
+        return
+    valeurs = [int(v) for v in champs]
+    total = sum(valeurs)
+    repos = valeurs[3] + valeurs[4]  # idle + iowait
+    dt, dr = total - _cpu['total'], repos - _cpu['repos']
+    if _cpu['total'] and dt > 0:
+        _cpu['pct'] = max(0, min(100, round(100 * (dt - dr) / dt)))
+    _cpu.update(total=total, repos=repos)
+
+
+def _ram() -> int:
+    """% de memoire occupee (ce que le systeme peut recuperer compte comme libre)."""
+    infos = dict(l.split(':', 1) for l in _lire('/proc/meminfo').splitlines() if ':' in l)
+    try:
+        total = int(infos['MemTotal'].split()[0])
+        dispo = int(infos['MemAvailable'].split()[0])
+    except (KeyError, ValueError, IndexError):
+        return 0
+    return round(100 * (total - dispo) / total) if total else 0
+
+
+def _couleur(pct: int, jaune: int, rouge: int) -> int:
+    return VERT if pct < jaune else JAUNE if pct < rouge else ROUGE
+
+
 def _largeur(seg: list[tuple[str, int, bool, str]]) -> int:
     return sum(len(s[0]) for s in seg) + len(SEP) * max(0, len(seg) - 1) + 1
 
 
 # quand la place manque, ces elements disparaissent dans cet ordre ;
 # l'heure et la batterie restent toujours
-SACRIFIES = ('duree', 'date', 'up', 'down', 'charge')
+SACRIFIES = ('duree', 'date', 'up', 'down', 'ram', 'cpu')
 
 
 def _segments() -> list[tuple[str, int, bool, str]]:
     """(texte, couleur, gras, nom) de chaque element, de gauche a droite."""
     allume = int(float((_lire('/proc/uptime').split() or ['0'])[0]))
-    charges = _lire('/proc/loadavg').split()[:3] or ['0', '0', '0']
-    ratio = float(charges[0]) / COEURS
+    ram = _ram()
     now = time.localtime()
     seg = [
         (_duree(allume), GRIS, False, 'duree'),
-        (' '.join(charges), VERT if ratio < 0.5 else JAUNE if ratio < 0.9 else ROUGE, False, 'charge'),
+        (f'CPU {_cpu["pct"]}%', _couleur(_cpu['pct'], 50, 90), False, 'cpu'),
+        (f'RAM {ram}%', _couleur(ram, 70, 90), False, 'ram'),
         (f'↓{_debit(_reseau["down"])}', CYAN, False, 'down'),
         (f'↑{_debit(_reseau["up"])}', VIOLET, False, 'up'),
         (f'{JOURS[now.tm_wday]} {now.tm_mday:02d} {MOIS[now.tm_mon - 1]}', BLEU, False, 'date'),
@@ -129,9 +157,11 @@ def draw_tab(draw_data, screen, tab, before, max_tab_length, index, is_last, ext
 
 def _tick(timer_id) -> None:
     _maj_reseau()
+    _maj_cpu()
     for tm in get_boss().all_tab_managers:
         tm.mark_tab_bar_dirty()
 
 
 _maj_reseau()
+_maj_cpu()
 add_timer(_tick, 1.0, True)  # kitty charge ce module une seule fois
