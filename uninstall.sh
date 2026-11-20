@@ -35,6 +35,7 @@ retire_lien "$KCONF/autosave.py"
 retire_lien "$KCONF/launch_wrapper.py"
 retire_lien "$KCONF/poste.conf"
 retire_lien "$KCONF/tab_bar.py"
+retire_lien "$HOME/.w3m/config"
 retire_bloc "$KCONF/kitty.conf"
 retire_bloc "$HOME/.bashrc"
 

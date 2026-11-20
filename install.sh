@@ -42,8 +42,12 @@ bloc "$KCONF/kitty.conf" "include poste.conf"
 [ -f "$HOME/.local/state/kitty-autosave/session.kitty-session" ] ||
     printf 'launch\n' > "$HOME/.local/state/kitty-autosave/session.kitty-session"
 
-echo "== bash : relance des sessions Claude"
-bloc "$HOME/.bashrc" "[ -f \"$DEPOT/bash/relance-claude.sh\" ] && . \"$DEPOT/bash/relance-claude.sh\""
+echo "== bash : relance des sessions Claude, commande web"
+bloc "$HOME/.bashrc" "for f in \"$DEPOT\"/bash/*.sh; do . \"\$f\"; done; unset f"
+
+echo "== w3m : navigateur dans le terminal"
+mkdir -p "$HOME/.w3m"
+lien w3m/config "$HOME/.w3m/config"
 
 echo "== lanceurs"
 if [ -x "$KAPP/bin/kitty" ]; then
