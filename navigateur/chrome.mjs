@@ -305,11 +305,28 @@ ecoutes['Target.targetInfoChanged'] = ({ targetInfo: t }) => {
     }
 };
 await cdp('Target.setDiscoverTargets', { discover: true });
+// diagnostic a la demande : POSTE_CHROME_JOURNAL=1 poste-chrome ... -> journal.log
+const journal = process.env.POSTE_CHROME_JOURNAL ? path.join(ETAT, 'journal.log') : null;
+const noter = (texte) => { if (journal) fs.appendFileSync(journal, `${Date.now() - t0} ms  ${texte}\n`); };
+let images = 0;
 ecoutes['Page.screencastFrame'] = (p) => {
     page('Page.screencastFrameAck', { sessionId: p.sessionId });
     if (!imageActive) etape('premiere image');
+    noter(`image n°${++images} (${Math.round(p.data.length / 1024)} Ko)`);
     afficher(p.data);
 };
+if (journal) {
+    fs.writeFileSync(journal, '');
+    ecoutes['Page.loadEventFired'] = () => noter('chargement termine (load)');
+    ecoutes['Page.frameNavigated'] = ({ frame }) => { if (!frame.parentId) noter(`page : ${frame.url.slice(0, 80)}`); };
+    ecoutes['Network.loadingFailed'] = (p) => noter(`requete echouee : ${p.errorText} ${p.blockedReason || ''} ${p.type || ''}`);
+    ecoutes['Network.responseReceived'] = (p) => { if (p.response.status >= 400) noter(`HTTP ${p.response.status} ${p.response.url.slice(0, 120)}`); };
+    ecoutes['Runtime.exceptionThrown'] = (p) => noter(`erreur JS : ${(p.exceptionDetails.exception?.description || p.exceptionDetails.text).slice(0, 200)}`);
+    ecoutes['Log.entryAdded'] = ({ entry: e }) => { if (e.level === 'error') noter(`console : ${e.text.slice(0, 200)}`); };
+    await page('Network.enable');
+    await page('Runtime.enable');
+    await page('Log.enable');
+}
 await page('Page.enable');
 // s'annoncer comme un Chrome normal : en "HeadlessChrome", beaucoup de sites servent une autre page
 const { userAgent = '' } = await cdp('Browser.getVersion');
