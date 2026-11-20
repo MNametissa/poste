@@ -6,11 +6,12 @@
 // - affiche chaque image de la page avec le protocole graphique de kitty ;
 // - transmet clics, molette et clavier.
 // Usage : poste-chrome [--profil NOM] [adresse ou recherche]
-// Touches : Ctrl+L adresse, Alt+Gauche/Droite precedent/suivant, F5 recharger, Ctrl+Q quitter.
+// Touches : Ctrl+L adresse, Alt+Gauche/Droite precedent/suivant, F5 recharger, F12 DevTools, Ctrl+Q quitter.
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { ouvrirPont } from './pont-devtools.mjs';
 
 const HOME = os.homedir();
 const ETAT = path.join(HOME, '.local/state/poste/chrome');
@@ -105,14 +106,16 @@ let recu = Buffer.alloc(0);
 let numero = 0;
 const attente = new Map();
 const ecoutes = {};
+const relais = new Map();  // session ouverte pour l'interface DevTools -> son relais
 chrome.stdio[4].on('data', (b) => {
     recu = Buffer.concat([recu, b]);
     let i;
     while ((i = recu.indexOf(0)) >= 0) {
         const m = JSON.parse(recu.subarray(0, i).toString('utf8'));
         recu = recu.subarray(i + 1);
-        if (m.id && attente.has(m.id)) { attente.get(m.id)(m.result || {}); attente.delete(m.id); }
-        else if (m.method && ecoutes[m.method]) ecoutes[m.method](m.params || {});
+        if (m.sessionId && relais.has(m.sessionId)) relais.get(m.sessionId)(m);
+        else if (m.id && attente.has(m.id)) { attente.get(m.id)(m.result || {}); attente.delete(m.id); }
+        else if (m.method && ecoutes[m.method]) ecoutes[m.method](m.params || {}, m.sessionId);
     }
 });
 const cdp = (method, params = {}, sessionId) => new Promise((r) => {
@@ -122,6 +125,9 @@ const cdp = (method, params = {}, sessionId) => new Promise((r) => {
 });
 let session = null;
 const page = (method, params) => cdp(method, params, session);
+let dt = null;          // DevTools ouverts : { cible, session }
+let focus = 'page';     // zone qui recoit le clavier : 'page' ou 'dt'
+const actif = (method, params) => cdp(method, params, focus === 'dt' && dt ? dt.session : session);
 
 // ---------- 3. terminal
 let fini = false;
@@ -130,7 +136,8 @@ let adresse = '';
 let edition = null;  // texte en cours de saisie dans la barre d'adresse
 let decalage = 18;   // hauteur en pixels de la ligne de la barre
 let largeur = 0;
-let hauteur = 0;
+let hauteur = 0;    // hauteur de la page en pixels
+let hauteurDt = 0;  // hauteur des DevTools en pixels (0 si fermes)
 
 function quitter(code = 0) {
     if (fini) return;
@@ -146,7 +153,7 @@ chrome.on('exit', () => quitter(1));
 
 function barre() {
     const cols = process.stdout.columns;
-    const aide = ' Ctrl+L adresse  Alt+←/→  F5  Ctrl+Q ';
+    const aide = ' Ctrl+L adresse  Alt+←/→  F5  F12  Ctrl+Q ';
     const texte = edition !== null ? ` Adresse : ${edition}▏` : ` ${titre || 'Chrome'} — ${adresse}`;
     const place = Math.max(0, cols - aide.length);
     const gauche = texte.length > place ? texte.slice(0, Math.max(0, place - 1)) + '…' : texte.padEnd(place);
@@ -156,19 +163,22 @@ function barre() {
 
 // Image PNG de la page, sous la barre, sans clignotement :
 // - mise a jour synchronisee (?2026) : kitty n'affiche rien avant la fin de l'envoi ;
-// - double tampon : la nouvelle image (numero 1 ou 2) est posee, puis seulement l'ancienne effacee.
-let imageActive = 0;
-function afficher(b64) {
-    const nouvelle = imageActive === 1 ? 2 : 1;
-    let s = `${ESC}[?2026h${ESC}7${ESC}[2;1H`;
+// - double tampon : la nouvelle image (page 1 ou 2, DevTools 3 ou 4) est posee, puis seulement l'ancienne effacee.
+const imageActive = { page: 0, dt: 0 };
+function afficher(b64, zone) {
+    const base = zone === 'dt' ? 3 : 1;
+    const ancienne = imageActive[zone];
+    const nouvelle = ancienne === base ? base + 1 : base;
+    const ligne = zone === 'dt' ? 2 + Math.round(hauteur / decalage) : 2;
+    let s = `${ESC}[?2026h${ESC}7${ESC}[${ligne};1H`;
     for (let i = 0; i < b64.length; i += 4096) {
         const plus = i + 4096 < b64.length ? 1 : 0;
         const bout = b64.slice(i, i + 4096);
         s += i === 0 ? `${ESC}_Ga=T,f=100,i=${nouvelle},p=1,q=2,C=1,m=${plus};${bout}${ESC}\\` : `${ESC}_Gm=${plus};${bout}${ESC}\\`;
     }
     s += `${ESC}8`;
-    if (imageActive) s += `${ESC}_Ga=d,d=I,i=${imageActive},q=2${ESC}\\`;
-    imageActive = nouvelle;
+    if (ancienne) s += `${ESC}_Ga=d,d=I,i=${ancienne},q=2${ESC}\\`;
+    imageActive[zone] = nouvelle;
     ecrire(s + `${ESC}[?2026l`);
 }
 
@@ -183,10 +193,55 @@ async function dimensionner() {
     const px = await taillePixels();
     decalage = Math.floor(px.h / process.stdout.rows);
     largeur = px.w;
-    hauteur = px.h - decalage;
-    await page('Emulation.setDeviceMetricsOverride', { width: largeur, height: hauteur, deviceScaleFactor: 1, mobile: false });
-    await page('Page.stopScreencast');
-    await page('Page.startScreencast', { format: 'png', maxWidth: largeur, maxHeight: hauteur, everyNthFrame: 1 });
+    const lignes = process.stdout.rows - 1;
+    hauteur = dt ? Math.ceil(lignes / 2) * decalage : px.h - decalage;  // DevTools : moitie basse
+    hauteurDt = dt ? px.h - decalage - hauteur : 0;
+    const zones = [[session, hauteur]];
+    if (dt) zones.push([dt.session, hauteurDt]);
+    for (const [s, h] of zones) {
+        await cdp('Emulation.setDeviceMetricsOverride', { width: largeur, height: h, deviceScaleFactor: 1, mobile: false }, s);
+        await cdp('Page.stopScreencast', {}, s);
+        await cdp('Page.startScreencast', { format: 'png', maxWidth: largeur, maxHeight: h, everyNthFrame: 1 }, s);
+    }
+}
+
+// F12 : les vrais DevTools de Chrome (page devtools://, ouverte dans le meme Chrome sans
+// fenetre), branches sur la page par le relais local de pont-devtools.mjs.
+let pont = null;
+let bascule = false;
+async function devtools() {
+    if (bascule) return;
+    bascule = true;
+    try {
+        if (dt) {
+            const d = dt;
+            dt = null;
+            focus = 'page';
+            pont.deconnecter();
+            await cdp('Target.closeTarget', { targetId: d.cible });
+            ecrire(`${ESC}_Ga=d,d=I,i=3,q=2${ESC}\\${ESC}_Ga=d,d=I,i=4,q=2${ESC}\\`);
+            imageActive.dt = 0;
+        } else {
+            pont ??= await ouvrirPont(async (envoyer) => {
+                const { sessionId } = await cdp('Target.attachToTarget', { targetId: cible.targetId, flatten: true });
+                relais.set(sessionId, (m) => { delete m.sessionId; envoyer(JSON.stringify(m)); });
+                return {
+                    recevoir: (t) => { const m = JSON.parse(t); m.sessionId = sessionId; versChrome.write(JSON.stringify(m) + '\0'); },
+                    fermer: () => { relais.delete(sessionId); cdp('Target.detachFromTarget', { sessionId }); },
+                };
+            });
+            const { targetId } = await cdp('Target.createTarget', { url: `devtools://devtools/bundled/devtools_app.html?ws=${pont.adresse}` });
+            const s = (await cdp('Target.attachToTarget', { targetId, flatten: true })).sessionId;
+            await cdp('Page.enable', {}, s);
+            await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] }, s);
+            await cdp('Emulation.setFocusEmulationEnabled', { enabled: true }, s);
+            dt = { cible: targetId, session: s };
+            focus = 'dt';
+        }
+        ecrire(`${ESC}[2J`);
+        await dimensionner();
+        barre();
+    } finally { bascule = false; }
 }
 
 function versAdresse(t) {
@@ -207,8 +262,12 @@ async function historique(sens) {
 let dernierClic = { t: 0, x: 0, y: 0, n: 0 };
 function souris(b, x, y, relache) {
     const px = x - 1;
-    const py = y - 1 - decalage;
+    let py = y - 1 - decalage;
     if (py < 0) { if (!relache && b === 0) { edition = ''; barre(); } return; }
+    let zone = session;
+    if (dt && py >= hauteur) { zone = dt.session; py -= hauteur; }
+    if (!relache && !(b & 32) && !(b & 64)) focus = zone === session ? 'page' : 'dt';
+    const page = (method, params) => cdp(method, params, zone);
     const modifiers = (b & 8 ? 1 : 0) | (b & 16 ? 2 : 0) | (b & 4 ? 8 : 0);
     if (b & 64) {
         page('Input.dispatchMouseEvent', { type: 'mouseWheel', x: px, y: py, deltaX: 0, deltaY: (b & 1) ? 120 : -120, modifiers });
@@ -238,8 +297,8 @@ const TOUCHES = {
 
 function envoyerTouche(key, keyCode, texte, modifiers = 0) {
     const code = key.length === 1 ? `Key${key.toUpperCase()}` : key;
-    page('Input.dispatchKeyEvent', { type: texte ? 'keyDown' : 'rawKeyDown', key, code, windowsVirtualKeyCode: keyCode, modifiers, ...(texte && { text: texte }) });
-    page('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: keyCode, modifiers });
+    actif('Input.dispatchKeyEvent', { type: texte ? 'keyDown' : 'rawKeyDown', key, code, windowsVirtualKeyCode: keyCode, modifiers, ...(texte && { text: texte }) });
+    actif('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: keyCode, modifiers });
 }
 
 function touche(seq) {
@@ -253,6 +312,7 @@ function touche(seq) {
     if (seq === '\x11') return quitter(0);                                   // Ctrl+Q
     if (seq === '\x0c') { edition = ''; return barre(); }                    // Ctrl+L
     if (seq === '\x1b[15~' || seq === '\x12') return page('Page.reload');    // F5, Ctrl+R
+    if (seq === '\x1b[24~') return devtools();                              // F12
     if (seq === '\x1b[1;3D') return historique(-1);                          // Alt+Gauche
     if (seq === '\x1b[1;3C') return historique(1);                           // Alt+Droite
     if (seq === '\x1b[Z') return envoyerTouche('Tab', 9, null, 8);           // Maj+Tab
@@ -263,7 +323,7 @@ function touche(seq) {
 
 function texte(t) {
     if (edition !== null) { edition += t; barre(); }
-    else page('Input.insertText', { text: t });
+    else actif('Input.insertText', { text: t });
 }
 
 let entree = '';
@@ -299,7 +359,7 @@ if (!cible) quitter(1);
 session = (await cdp('Target.attachToTarget', { targetId: cible.targetId, flatten: true })).sessionId;
 ecoutes['Target.targetInfoChanged'] = ({ targetInfo: t }) => {
     if (t.targetId === cible.targetId) { titre = t.title; adresse = t.url; barre(); }
-    else if (t.type === 'page' && t.url && t.url !== 'about:blank') {  // lien ouvert dans un nouvel onglet : on le suit ici
+    else if (t.type === 'page' && t.url && t.url !== 'about:blank' && !t.url.startsWith('devtools://')) {  // lien ouvert dans un nouvel onglet : on le suit ici
         naviguer(t.url);
         cdp('Target.closeTarget', { targetId: t.targetId });
     }
@@ -309,11 +369,13 @@ await cdp('Target.setDiscoverTargets', { discover: true });
 const journal = process.env.POSTE_CHROME_JOURNAL ? path.join(ETAT, 'journal.log') : null;
 const noter = (texte) => { if (journal) fs.appendFileSync(journal, `${Date.now() - t0} ms  ${texte}\n`); };
 let images = 0;
-ecoutes['Page.screencastFrame'] = (p) => {
-    page('Page.screencastFrameAck', { sessionId: p.sessionId });
-    if (!imageActive) etape('premiere image');
-    noter(`image n°${++images} (${Math.round(p.data.length / 1024)} Ko)`);
-    afficher(p.data);
+ecoutes['Page.screencastFrame'] = (p, s) => {
+    cdp('Page.screencastFrameAck', { sessionId: p.sessionId }, s);
+    const zone = s === session ? 'page' : 'dt';
+    if (zone === 'dt' && !dt) return;
+    if (!imageActive.page) etape('premiere image');
+    noter(`image ${zone} n°${++images} (${Math.round(p.data.length / 1024)} Ko)`);
+    afficher(p.data, zone);
 };
 if (journal) {
     fs.writeFileSync(journal, '');
