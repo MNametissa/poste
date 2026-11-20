@@ -195,12 +195,15 @@ const taillePixels = () => new Promise((r) => {
     setTimeout(() => { if (reponsePixels === r) { reponsePixels = null; r({ w: process.stdout.columns * 9, h: process.stdout.rows * 18 }); } }, 1000);
 });
 
-async function dimensionner() {
-    const px = await taillePixels();
+let pixels = null;     // taille de la zone de texte en pixels (derniere mesure)
+let partPage = 0.5;    // part de la largeur pour la page quand les DevTools sont ouverts
+async function dimensionner(remesurer = true) {
+    if (remesurer || !pixels) pixels = await taillePixels();
+    const px = pixels;
     decalage = Math.floor(px.h / process.stdout.rows);
     hauteur = px.h - decalage;
     const cols = process.stdout.columns;
-    colonnesPage = dt ? Math.ceil(cols / 2) : cols;  // DevTools : moitie droite
+    colonnesPage = dt ? Math.round(cols * partPage) : cols;  // DevTools a droite
     largeur = dt ? Math.floor(colonnesPage * px.w / cols) : px.w;
     largeurDt = dt ? px.w - largeur : 0;
     const zones = [[session, largeur]];
@@ -271,9 +274,24 @@ async function historique(sens) {
 
 // ---------- 4. souris (coordonnees en pixels, mode 1016)
 let dernierClic = { t: 0, x: 0, y: 0, n: 0 };
+// separation page / DevTools : on la saisit a +-4 pixels et on la tire
+let glisse = false;
+let redimEnCours = false;
+let redimAFaire = false;
+async function redimensionner() {
+    if (redimEnCours) { redimAFaire = true; return; }
+    redimEnCours = true;
+    try { do { redimAFaire = false; await dimensionner(false); } while (redimAFaire); } finally { redimEnCours = false; }
+}
+
 function souris(b, x, y, relache) {
     let px = x - 1;
     const py = y - 1 - decalage;
+    if (dt && (glisse || (!relache && b === 0 && py >= 0 && Math.abs(px - largeur) <= 4))) {
+        glisse = !relache;
+        if ((b & 32) || relache) { partPage = Math.min(0.85, Math.max(0.15, px / pixels.w)); redimensionner(); }
+        return;
+    }
     if (py < 0) { if (!relache && b === 0) { edition = ''; barre(); } return; }
     let zone = session;
     if (dt && px >= largeur) { zone = dt.session; px -= largeur; }
