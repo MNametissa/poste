@@ -45,7 +45,11 @@ bloc "$KCONF/kitty.conf" "include poste.conf"
 echo "== bash : relance des sessions Claude, commande web"
 bloc "$HOME/.bashrc" "for f in \"$DEPOT\"/bash/*.sh; do . \"\$f\"; done; unset f"
 
-echo "== w3m : navigateur dans le terminal"
+echo "== Chrome dans le terminal"
+mkdir -p "$HOME/.local/bin"
+lien navigateur/poste-chrome "$HOME/.local/bin/poste-chrome"
+
+echo "== w3m : navigateur texte dans le terminal"
 mkdir -p "$HOME/.w3m"
 lien w3m/config "$HOME/.w3m/config"
 

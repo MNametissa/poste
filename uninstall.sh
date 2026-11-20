@@ -36,6 +36,7 @@ retire_lien "$KCONF/launch_wrapper.py"
 retire_lien "$KCONF/poste.conf"
 retire_lien "$KCONF/tab_bar.py"
 retire_lien "$HOME/.w3m/config"
+retire_lien "$HOME/.local/bin/poste-chrome"
 retire_bloc "$KCONF/kitty.conf"
 retire_bloc "$HOME/.bashrc"
 
