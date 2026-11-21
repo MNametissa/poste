@@ -8,7 +8,7 @@ for l in kitty kitten; do
     [ -L "$BIN/$l" ] && rm "$BIN/$l" && echo "  lien retire  $BIN/$l"
 done
 [ -d "$HOME/.local/kitty.app" ] && rm -rf "$HOME/.local/kitty.app" && echo "  supprime     ~/.local/kitty.app"
-for p in yazi ya; do
+for p in yazi ya btop; do
     [ -f "$BIN/$p" ] && rm "$BIN/$p" && echo "  supprime     $BIN/$p"
 done
 if [ -d "$HOME/.local/share/fonts/JetBrainsMono" ]; then

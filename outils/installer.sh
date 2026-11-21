@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installe ou met a jour les programmes du poste dans ~/.local, sans sudo :
-# kitty, yazi, police JetBrains Mono. Versions figees ci-dessous ; pour mettre
+# kitty, yazi, btop, police JetBrains Mono. Versions figees ci-dessous ; pour mettre
 # a jour : changer version et empreinte, puis lancer ../update.sh.
 # Un programme deja a la bonne version n'est pas retelecharge.
 set -euo pipefail
@@ -9,6 +9,8 @@ KITTY_VERSION=0.51.0
 KITTY_SHA256=c285daaf1b699997614939c8d1cd92dd8b99302ff12f18efcc3f69382aa72b1d
 YAZI_VERSION=26.9.1
 YAZI_SHA256=a02fe91d3304294048c681f010f1100856872a4e98ecf6927328e888d40a6ad2
+BTOP_VERSION=1.4.8
+BTOP_SHA256=af589cf82cc9ea9c29ce050b9239a13bef2d1492256d476156e1054a42ce89ad
 POLICE_VERSION=2.304
 # JetBrains ne publie pas d'empreinte pour cette version : calculee le 2026-11-20
 POLICE_SHA256=6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf
@@ -58,6 +60,19 @@ else
         "yazi-$YAZI_VERSION.zip" "$YAZI_SHA256"
     unzip -qjo "$CACHE/yazi-$YAZI_VERSION.zip" 'yazi-x86_64-unknown-linux-gnu/yazi' 'yazi-x86_64-unknown-linux-gnu/ya' -d "$CACHE/yazi"
     install -m 755 "$CACHE/yazi/yazi" "$CACHE/yazi/ya" "$BIN/"
+    echo "  installe dans $BIN"
+fi
+
+echo "== btop $BTOP_VERSION"
+if [ "$("$BIN/btop" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" = "$BTOP_VERSION" ]; then
+    echo "  deja a jour"
+else
+    telecharge "https://github.com/aristocratos/btop/releases/download/v$BTOP_VERSION/btop-x86_64-unknown-linux-musl.tar.gz" \
+        "btop-$BTOP_VERSION.tar.gz" "$BTOP_SHA256"
+    rm -rf "$CACHE/btop"
+    mkdir -p "$CACHE/btop"
+    tar -xzf "$CACHE/btop-$BTOP_VERSION.tar.gz" -C "$CACHE/btop"
+    install -m 755 "$(find "$CACHE/btop" -type f -name btop -path '*/bin/*' | head -1)" "$BIN/btop"
     echo "  installe dans $BIN"
 fi
 

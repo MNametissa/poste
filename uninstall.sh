@@ -55,4 +55,15 @@ if [ -f "$ETAT/terminal-avant" ] && gsettings list-keys "$SCHEMA" >/dev/null 2>&
     echo "  terminal par defaut remis : $AVANT"
 fi
 
+echo "== terminal rapide"
+retire_lien "$KCONF/quick-access-terminal.conf"
+if gsettings list-keys org.cinnamon.desktop.keybindings >/dev/null 2>&1; then
+    LISTE=$(gsettings get org.cinnamon.desktop.keybindings custom-list)
+    gsettings set org.cinnamon.desktop.keybindings custom-list "$(python3 -c '
+import ast, sys
+print([x for x in ast.literal_eval(sys.argv[1].replace("@as ", "")) if x != "custom-poste-rapide"])' "$LISTE")"
+    dconf reset -f /org/cinnamon/desktop/keybindings/custom-keybindings/custom-poste-rapide/
+    echo "  raccourci Super+\` retire"
+fi
+
 echo "== termine (sauvegarde des sessions conservee : ~/.local/state/kitty-autosave)"

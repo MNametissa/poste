@@ -90,4 +90,21 @@ else
     echo "  ignore (kitty absent ou bureau autre que Cinnamon)"
 fi
 
+echo "== terminal rapide : Super+\` (btop)"
+lien kitty/quick-access-terminal.conf "$KCONF/quick-access-terminal.conf"
+if [ -x "$KAPP/bin/kitten" ] && gsettings list-keys org.cinnamon.desktop.keybindings >/dev/null 2>&1; then
+    RAPIDE=/org/cinnamon/desktop/keybindings/custom-keybindings/custom-poste-rapide/
+    dconf write "${RAPIDE}name" "'Terminal rapide (poste)'"
+    dconf write "${RAPIDE}command" "'$KAPP/bin/kitten quick-access-terminal btop'"
+    dconf write "${RAPIDE}binding" "['<Super>grave']"
+    LISTE=$(gsettings get org.cinnamon.desktop.keybindings custom-list)
+    gsettings set org.cinnamon.desktop.keybindings custom-list "$(python3 -c '
+import ast, sys
+l = ast.literal_eval(sys.argv[1].replace("@as ", ""))
+print(l if "custom-poste-rapide" in l else l + ["custom-poste-rapide"])' "$LISTE")"
+    echo "  raccourci global Super+\` -> kitten quick-access-terminal btop"
+else
+    echo "  ignore (kitty absent ou bureau autre que Cinnamon)"
+fi
+
 echo "== termine."
