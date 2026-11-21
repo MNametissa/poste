@@ -38,6 +38,7 @@ lien kitty/autosave.py "$KCONF/autosave.py"
 lien kitty/launch_wrapper.py "$KCONF/launch_wrapper.py"
 lien kitty/poste.conf "$KCONF/poste.conf"
 lien kitty/tab_bar.py "$KCONF/tab_bar.py"
+lien kitty/immersion.py "$KCONF/immersion.py"
 bloc "$KCONF/kitty.conf" "include poste.conf"
 [ -f "$HOME/.local/state/kitty-autosave/session.kitty-session" ] ||
     printf 'launch\n' > "$HOME/.local/state/kitty-autosave/session.kitty-session"

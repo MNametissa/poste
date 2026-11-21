@@ -74,6 +74,7 @@ function quitter(code = 0, volontaire = false) {
     fini = true;
     // fermeture voulue : rien a rouvrir au prochain demarrage
     if (volontaire) ecrire(`${ESC}]1337;SetUserVar=poste_web\x07`);
+    if (immersif) ecrire(`${ESC}]1337;SetUserVar=poste_immersif\x07`);
     ecrire(SORTIR);
     try { process.stdin.setRawMode(false); } catch { /* deja restaure */ }
     // effacer la copie temporaire seulement une fois Chrome arrete : en s'arretant il y reecrit des fichiers
@@ -277,11 +278,10 @@ function rechercher() {
     };
     barre();
 }
-// F11 : page sur tout le terminal, fenetre kitty en plein ecran (wmctrl, X11)
+// F11 : page sur tout le terminal ; kitty/immersion.py masque le reste de la fenetre kitty
 function immersion() {
     immersif = !immersif;
-    const wmctrl = trouver('wmctrl');
-    if (wmctrl && process.env.WINDOWID) execFile(wmctrl, ['-i', '-r', process.env.WINDOWID, '-b', `${immersif ? 'add' : 'remove'},fullscreen`], () => {});
+    ecrire(immersif ? `${ESC}]1337;SetUserVar=poste_immersif=MQ==\x07` : `${ESC}]1337;SetUserVar=poste_immersif\x07`);
     ecrire(`${ESC}[2J`);
     redimensionner();
     barre();
